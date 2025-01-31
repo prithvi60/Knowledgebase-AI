@@ -1,87 +1,77 @@
 import streamlit as st
-from langchain.document_loaders.csv_loader import CSVLoader
-from langchain.vectorstores import FAISS
-from langchain.embeddings.openai import OpenAIEmbeddings
+from langchain_community.document_loaders import CSVLoader
+from langchain_community.vectorstores import FAISS
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain.prompts import PromptTemplate
-from langchain.chat_models import ChatOpenAI
-from langchain.chains import LLMChain
+from langchain_core.runnables import RunnableLambda
 from dotenv import load_dotenv
+import os
 
+# Load environment variables
 load_dotenv()
 
-# 1. Vectorise the sales response csv data
-loader = CSVLoader(file_path="sales_response.csv")
-documents = loader.load()
+# Ensure OpenAI API Key is available
+openai_api_key = os.getenv("OPENAI_API_KEY")
+if not openai_api_key:
+    raise ValueError("Missing OPENAI_API_KEY in environment variables")
 
-embeddings = OpenAIEmbeddings()
-db = FAISS.from_documents(documents, embeddings)
+# 1. Load and Vectorize the Brand Naming CSV Data
+loader = CSVLoader(file_path="brand_naming_logic.csv")
+documents = loader.load()
+# print(documents[0])
+# Extract only text content from documents
+text_docs = [doc.page_content for doc in documents]
+
+# Initialize OpenAI embeddings
+embeddings = OpenAIEmbeddings(api_key=openai_api_key)
+
+# Create FAISS vector store
+db = FAISS.from_texts(text_docs, embeddings)
 
 # 2. Function for similarity search
-
-
 def retrieve_info(query):
     similar_response = db.similarity_search(query, k=3)
+    return [doc.page_content for doc in similar_response]
 
-    page_contents_array = [doc.page_content for doc in similar_response]
+# 3. Setup Chat Model
+llm = ChatOpenAI(model="gpt-3.5-turbo-16k", openai_api_key=openai_api_key)
 
-    # print(page_contents_array)
-
-    return page_contents_array
-
-
-# 3. Setup LLMChain & prompts
-llm = ChatOpenAI(temperature=0, model="gpt-3.5-turbo-16k-0613")
-
-template = """
-You are a world class business development representative. 
-I will share a prospect's message with you and you will give me the best answer that 
-I should send to this prospect based on past best practies, 
-and you will follow ALL of the rules below:
-
-1/ Response should be very similar or even identical to the past best practies, 
-in terms of length, ton of voice, logical arguments and other details
-
-2/ If the best practice are irrelevant, then try to mimic the style of the best practice to prospect's message
-
-Below is a message I received from the prospect:
-{message}
-
-Here is a list of best practies of how we normally respond to prospect in similar scenarios:
-{best_practice}
-
-Please write the best response that I should send to this prospect:
-"""
-
-prompt = PromptTemplate(
-    input_variables=["message", "best_practice"],
-    template=template
-)
-
-chain = LLMChain(llm=llm, prompt=prompt)
-
-
-# 4. Retrieval augmented generation
+# Updated Chain using `RunnableLambda`
 def generate_response(message):
     best_practice = retrieve_info(message)
-    response = chain.run(message=message, best_practice=best_practice)
-    return response
+    prompt_template = """
+    You are an AI-powered brand naming expert. I will describe a brand concept, and you will generate an ideal name based on past best practices.
+    Follow these rules:
+    1. Ensure the name is unique and memorable.
+    2. Use phonetics that are easy to pronounce across different languages.
+    3. The name should align with the industry and brand values.
+    4. Keep it short and impactful.
 
+    Here is the brand description:
+    {message}
 
-# 5. Build an app with streamlit
+    Based on similar naming best practices:
+    {best_practice}
+
+    Generate the best possible brand name:
+    """
+    formatted_prompt = prompt_template.format(message=message, best_practice=best_practice)
+    response = llm.invoke(formatted_prompt)
+    return response.content
+
+# 4. Build an app with Streamlit
 def main():
-    st.set_page_config(
-        page_title="Customer response generator", page_icon=":bird:")
-
-    st.header("Customer response generator :bird:")
-    message = st.text_area("customer message")
+    st.set_page_config(page_title="Brand Name Generator", page_icon=":rocket:")
+    st.header("🚀 Brand Name Generator")
+    
+    message = st.text_area("Describe your brand (Industry, Values, Style, etc.)")
 
     if message:
-        st.write("Generating best practice message...")
+        st.write("Generating a meaningful name for your brand...")
 
         result = generate_response(message)
 
-        st.info(result)
-
+        st.success(f"Suggested Brand Name: **{result.strip()}**")
 
 if __name__ == '__main__':
     main()
